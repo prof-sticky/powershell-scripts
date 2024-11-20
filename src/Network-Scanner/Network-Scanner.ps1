@@ -1,4 +1,6 @@
-# Functions
+# ----------------------------------------------------------------
+#                           Functions
+# ----------------------------------------------------------------
 
 # Get-NetworkInfo - Returns an array of all connected networks from multiple NICS (eg. Wifi and Ethernet connected simultaneously)
 function Get-NetworkInfo {
@@ -111,6 +113,7 @@ function Get-BroadcastAddress {
     $resultNetworkString = ($resultArray -join '')
     return $resultNetworkString
 }
+# Calculate the total amount of hosts possible on te network
 function Get-AvailableHosts {
     param (
         [string]$SubnetBinary
@@ -123,7 +126,32 @@ function Get-AvailableHosts {
     return $hosts - 2
 }
 
-# Main
+
+# Convert the IP Address String into a single integer in big-endian format, this allows us to perform arithmatic and comparisons on IP adddresses
+function Convert-IPToInt {
+    param (
+        [string]$IPAddress
+    )
+    # Split the IP into octets, parse them as integers, and combine into a single 32-bit integer
+    $octets = $IPAddress -split '\.' | ForEach-Object { [int]$_ }
+    return ($octets[0] -shl 24) -bor ($octets[1] -shl 16) -bor ($octets[2] -shl 8) -bor $octets[3]
+}
+
+# Convert the integer back into a meaningful IP Address
+function Convert-IntToIP {
+    param (
+        [int]$IntAddress
+    )
+    # Extract each octet using bitwise operations and shifts
+    return "{0}.{1}.{2}.{3}" -f (($IntAddress -shr 24) -band 255),
+                               (($IntAddress -shr 16) -band 255),
+                               (($IntAddress -shr 8) -band 255),
+                               ($IntAddress -band 255)
+}
+
+# ----------------------------------------------------------------
+#                           Main
+# ----------------------------------------------------------------
 
 # Present connected networks
 $connectednetworks = Get-NetworkInfo
@@ -132,106 +160,95 @@ Write-Host ($connectednetworks | Format-Table | Out-String)
 $ChosenNetwork = Read-Host -Prompt "Which network would you like to scan?"
 $ChosenNetwork = $ChosenNetwork - 1
 
-Write-Host "----------------------------------------------------------------"
+# Calculate information about the chosen network
 
 # Convert the CIDR notation of the subnet mask to decimal
 $netmaskDecimal = Convert-CIDRtoDecimal -bitCount $ConnectedNetworks[$ChosenNetwork].Subnet
-Write-Host "Subnet Mask:" $netmaskDecimal
-
 # Convert both IP and Netmask to binary
 $ipBinary = Convert-IPtoBinary -ip $ConnectedNetworks[$ChosenNetwork].IPAddress
 $netmaskBinary = Convert-IPToBinary -ip $netmaskDecimal
-
 # Calculate the network address 
 $netAddressBinary = Get-NetworkAddress -ip $ipBinary -subnetMask $netmaskBinary
 $netAddressDecimal = Convert-BinaryToIp -Binary $netAddressBinary
-Write-Host "Network Address:" $netAddressDecimal
-
 # Calculate broadcast address
 $broadcastAddressBinary = Get-BroadcastAddress -ip $ipBinary -subnetMask $netmaskBinary
 $broadcastAddressDecimal = Convert-BinaryToIp -Binary $broadcastAddressBinary
-Write-Host "Broadcast address:" $broadcastAddressDecimal
-
 # Calculate the first host by flipping the last bit of the network address to a 1
 $firsthostBinary = $netAddressBinary.Substring(0, $netAddressBinary.Length - 1) + "1"
 $firsthostDecimal = Convert-BinaryToIp -Binary $firsthostBinary
-Write-Host "Host Min:"$firsthostDecimal
-
 # Calculate the last host by flipping the last bit of the network address to a 0
 $lasthostBinary = $broadcastAddressBinary.Substring(0, $broadcastAddressBinary.Length - 1) + "0"
 $lasthostDecimal = Convert-BinaryToIp -Binary $lasthostBinary
-Write-Host "Host Max:" $lasthostDecimal
-
 # Calculate the number of hosts
 $availableHosts = Get-AvailableHosts -SubnetBinary $netmaskBinary
-Write-Host "Number of hosts:" $availableHosts
 
+# Write out the network info
 Write-Host "----------------------------------------------------------------"
+Write-Host "Network Address:" $netAddressDecimal
+Write-Host "Subnet Mask:" $netmaskDecimal
+Write-Host "Broadcast address:" $broadcastAddressDecimal
+Write-Host "Host Min:"$firsthostDecimal
+Write-Host "Host Max:" $lasthostDecimal
+Write-Host "Number of hosts:" $availableHosts
+Write-Host "----------------------------------------------------------------"
+
+# Iterate through the IP range and ping hosts
+
+$outputFile = "Network-Scanner.csv"  # Define output file name and path
+# Clear the output file if it exists
+if (Test-Path $outputFile) {
+    Remove-Item $outputFile
+}
 
 # Present message that scan has begun
 Write-Host "Scanning" $firsthostDecimal "to" $lasthostDecimal
 
-# so i know the network address, and number of hosts
-# if the subnet mask is 24 or over, then i don't need to bother around with the 3rd octet, and i can use do network address + 1 to the number of hosts
-# if the subnet mask is 16-23 however, then i need to work out how much of the 3rd octet i need to calculate the the range of the network
-# if the subnet mask is under 16, then i need to mess with the second and first
+# Initialize an empty array to hold the results
+$pingResults = @()
 
-if ($ConnectedNetworks[$ChosenNetwork].Subnet -ge 24) {
-    $outputFile = "PingResults.csv"  # Define output file name and path
-    $networkaddress = ($ConnectedNetworks[$ChosenNetwork].IPAddress -split '\.')[0..2] -join "."
-    # Clear the output file if it exists
-    if (Test-Path $outputFile) {
-        Remove-Item $outputFile
-    }
-    # Initialize an empty array to hold the results
-    $pingResults = @()
+# Convert first and last IPs to integers
+$firstHostInt = Convert-IPToInt -IPAddress $firsthostDecimal
+$lastHostInt = Convert-IPToInt -IPAddress $lasthostDecimal
 
-    # Get the last octet of the first and last host
-    $firsthostOctet = ($firsthostDecimal -split '\.')[-1]
-    $lasthostOctet = ($lasthostDecimal -split '\.')[-1]
+# Create array of addresses to be pinged as integer
+$ipRangeInt = $firstHostInt..$lastHostInt
+# Convert everything in the array to a regular IP address, so it can be pinged
+$ipRangeDecimal = $ipRangeInt | ForEach-Object { Convert-IntToIP -IntAddress $_ }
 
-    # Create an array of IP addresses to ping
-    $ipAddresses = $firsthostOctet..$lasthostOctet | ForEach-Object { "$networkaddress.$_" }
+$ipRangeDecimal | ForEach-Object -Parallel { 
+    # Ping each IP and check if it’s reachable
+    $pingResult = Test-Connection -ComputerName $_ -Count 1 -Quiet -TimeoutSeconds 2
+    $dnsName = $null
 
-    $ipAddresses | ForEach-Object -Parallel { 
-        # Ping each IP and check if it’s reachable
-        $pingResult = Test-Connection -ComputerName $_ -Count 1 -Quiet -TimeoutSeconds 1
-        $dnsName = $null
-
-        # If reachable, resolve DNS name
-        if ($pingResult) {
-            try {
-                $dnsName = (Resolve-DnsName -Name $_ -ErrorAction Stop).NameHost
-            }
-            catch {
-                $dnsName = "DNS Resolution Failed"
-            }
+    # If reachable, resolve DNS name
+    if ($pingResult) {
+        try {
+            $dnsName = (Resolve-DnsName -Name $_ -ErrorAction Stop).NameHost
         }
-
-        # Create an object to store IP, result, and DNS name (if resolved)
-        [PSCustomObject]@{
-            IPAddress = $_
-            Status    = if ($pingResult) { "Reachable" } else { "Unreachable" }
-            DNSName   = if ($pingResult) { $dnsName } else { "N/A" }
+        catch {
+            $dnsName = "DNS Resolution Failed"
         }
-    } -ThrottleLimit 20 | ForEach-Object { 
-        # Collect each result and add it to the pingResults array
-        $pingResults += $_
     }
 
-    #Sort Results by IP Address, sort by version instead of string otherwise IP addresses won't sort properly
-    $sortedResults = $pingResults | Sort-Object { $_.IPAddress -as [Version] }
-
-    # Filter out objects without a response
-    $filteredResults = $sortedResults | Where-Object { $_.Status -eq "Reachable" }
-
-    # Export results to a CSV file
-    $filteredResults | Export-Csv -Path $outputFile -NoTypeInformation -Force
-
-    # Display completion message
-    Write-Host "Ping test complete. Results saved to $outputFile."
-
+    # Create an object to store IP, result, and DNS name (if resolved)
+    [PSCustomObject]@{
+        IPAddress = $_
+        Status    = if ($pingResult) { "Reachable" } else { "Unreachable" }
+        DNSName   = if ($pingResult) { $dnsName } else { "N/A" }
+    }
+} -ThrottleLimit 20 | ForEach-Object { 
+    # Collect each result and add it to the pingResults array
+    $pingResults += $_
 }
-else {
-    Write-Host "Subnets larger than /24 are not supported yet"
-}
+
+#Sort Results by IP Address, sort by version instead of string otherwise IP addresses won't sort properly
+$sortedResults = $pingResults | Sort-Object { $_.IPAddress -as [Version] }
+
+# Filter out objects without a response
+$filteredResults = $sortedResults | Where-Object { $_.Status -eq "Reachable" }
+
+# Export results to a CSV file
+$filteredResults | Export-Csv -Path $outputFile -NoTypeInformation -Force
+
+# Display completion message
+Write-Host "Ping test complete. Results saved to $outputFile."
