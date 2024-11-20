@@ -134,18 +134,18 @@ $ChosenNetwork = $ChosenNetwork - 1
 
 Write-Host "----------------------------------------------------------------"
 
+# Convert the CIDR notation of the subnet mask to decimal
+$netmaskDecimal = Convert-CIDRtoDecimal -bitCount $ConnectedNetworks[$ChosenNetwork].Subnet
+Write-Host "Subnet Mask:" $netmaskDecimal
+
 # Convert both IP and Netmask to binary
 $ipBinary = Convert-IPtoBinary -ip $ConnectedNetworks[$ChosenNetwork].IPAddress
 $netmaskBinary = Convert-IPToBinary -ip $netmaskDecimal
 
 # Calculate the network address 
 $netAddressBinary = Get-NetworkAddress -ip $ipBinary -subnetMask $netmaskBinary
-$netmaskDecimal = Convert-BinaryToIp -Binary $netAddressBinary
-Write-Host "Network Address:" $netmaskDecimal
-
-# Convert the CIDR notation of the subnet mask to decimal
-$netmaskDecimal = Convert-CIDRtoDecimal -bitCount $ConnectedNetworks[$ChosenNetwork].Subnet
-Write-Host "Subnet Mask:" $netmaskDecimal
+$netAddressDecimal = Convert-BinaryToIp -Binary $netAddressBinary
+Write-Host "Network Address:" $netAddressDecimal
 
 # Calculate broadcast address
 $broadcastAddressBinary = Get-BroadcastAddress -ip $ipBinary -subnetMask $netmaskBinary
