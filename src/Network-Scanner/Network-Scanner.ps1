@@ -203,6 +203,9 @@ if (Test-Path $outputFile) {
 # Present message that scan has begun
 Write-Host "Scanning" $firsthostDecimal "to" $lasthostDecimal
 
+# Create a stopwatch to time the scan
+$timer = [Diagnostics.Stopwatch]::StartNew()
+
 # Initialize an empty array to hold the results
 $pingResults = @()
 
@@ -250,5 +253,8 @@ $filteredResults = $sortedResults | Where-Object { $_.Status -eq "Reachable" }
 # Export results to a CSV file
 $filteredResults | Export-Csv -Path $outputFile -NoTypeInformation -Force
 
+# Stop timer
+$timer.stop() 
+
 # Display completion message
-Write-Host "Ping test complete. Results saved to $outputFile."
+Write-Host "Ping test complete. Results saved to $outputFile. Scan took $timer"
